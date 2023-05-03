@@ -13,7 +13,7 @@ from boto3.dynamodb.conditions import Key
 #from botocore.vendored import requests
 
 REGION = 'us-east-1'
-HOST = 'search-workouts-4i6jauwrslwk3mj5ipv6sghbyi.us-east-1.es.amazonaws.com'
+HOST = 'search-workouts-xxxxxxxxx.us-east-1.es.amazonaws.com'
 INDEX = 'courses'
 
 def to_json_parsable(d):
