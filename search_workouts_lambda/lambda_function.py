@@ -1,4 +1,3 @@
-
 import json
 import os
 
@@ -27,8 +26,8 @@ def to_json_parsable(d):
 def parse_query(query_body):
     client = boto3.client('lexv2-runtime')
     response = client.recognize_text(
-        botId='XXXXXXX', # MODIFY HERE
-        botAliasId='XXXXXXXX', # MODIFY HERE
+        botId='XXXXXX', # MODIFY HERE
+        botAliasId='XXXXXXX', # MODIFY HERE
         localeId='en_US',
         sessionId='testuser',
         text=query_body)
@@ -36,8 +35,14 @@ def parse_query(query_body):
     
     lex_resp = response['sessionState']['intent']['slots']
     
-    resp_arr = [lex_resp['type']['value']['interpretedValue'], lex_resp['zip']['value']['interpretedValue']]
-    #print(resp_arr)
+    t, z = '', ''
+    if(lex_resp['type']!=None):
+        t = lex_resp['type']['value']['interpretedValue']
+    if(lex_resp['zip']!=None):
+        z = lex_resp['zip']['value']['interpretedValue']
+    resp_arr = [t, z]
+    #resp_arr = [lex_resp['type']['value']['interpretedValue'], lex_resp['zip']['value']['interpretedValue']]
+    print(resp_arr)
     return resp_arr
     
 def get_courseIDs(slots):
@@ -45,7 +50,7 @@ def get_courseIDs(slots):
     workoutType, zipcode = slots
     print(workoutType, zipcode)
     #ALSO CAN ADD OUTDOORS/INDOORS, STATE
-    q = {'size': 10,
+    q = {'size': 20,
             "query": {
                 "bool": {
                   "should": [
@@ -71,21 +76,30 @@ def get_courseIDs(slots):
     hits = res['hits']['hits']
     results = []
     for hit in hits:
-        entry = hit['_source']
-        print('entry:', entry)
-        results.append(entry['objectKey'])
+        try:
+            entry = hit['_source']
+            print('entry:', entry)
+            results.append(entry['objectKey'])
+        except:
+            try:
+                entry = hit['_source']
+                print('entry:', entry)
+                results.append(entry['id'])
+            except Exception as e:
+                print('append hit entry failed:', hit['_source'])
+                print(e)
     return results
 
 def workout_info(place_ids):
     all_info = []
     
     client = boto3.resource('dynamodb', region_name = REGION)
-    table = client.Table('workout_database')
+    table = client.Table('workouts')
     #print(table)
     for pid in place_ids:
         try:
             info = table.query(
-                KeyConditionExpression=Key('place_id').eq(pid)
+                KeyConditionExpression=Key('id').eq(pid)
             )
             #print("info:", info['Items'])
             
@@ -118,12 +132,15 @@ def lambda_handler(event, context):
     querybody = event["queryStringParameters"]["query"]
     #print("query:",querybody)
     
+    #decoded_query = urllib.parse.unquote_plus(querybody)
+    
     parsed_info = parse_query(querybody)
     recs = get_courseIDs(parsed_info)
     
-    # choose 5 random fitness centers
+    # choose 10 random fitness centers
     max_len = len(recs)
-    random_pids = random.sample(recs, min(5, max_len))
+    random_pids = random.sample(recs, min(10, max_len))
+    print(random_pids)
     
     # get info from dynamo
     w_info = workout_info(random_pids)
@@ -145,4 +162,3 @@ def get_awsauth(region, service):
                     region,
                     service,
                     session_token=cred.token)
-
