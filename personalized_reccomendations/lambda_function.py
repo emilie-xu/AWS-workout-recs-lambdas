@@ -1,166 +1,150 @@
-
 import json
-import os
-
 import boto3
-from opensearchpy import OpenSearch, RequestsHttpConnection
-from requests_aws4auth import AWS4Auth
-
+from boto3.dynamodb.conditions import Key
+import math
 from decimal import Decimal
 
-import random
-from boto3.dynamodb.conditions import Key
-#from botocore.vendored import requests
+class DecimalEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            return float(obj)
+        return super(DecimalEncoder, self).default(obj)
 
-REGION = 'us-east-1'
-HOST = 'search-workouts-xxxxxxxxx.us-east-1.es.amazonaws.com'
-INDEX = 'courses'
 
-def to_json_parsable(d):
-    #print(d)
-    for k, v in d.items():
-        if(type(v) == Decimal):
-            #print(v)
-            d[k] = float(v)
-            #print(d[k])
+def weighted_dot_product(vec1, vec2, weights):
+    #print('weighted dot prod: ')
+    # for a, b, w in zip(vec1, vec2, weights):
+    #     print(a, b, w)
+    #     print(a*b*w)
+    #print('final result:', sum(a * b * w for a, b, w in zip(vec1, vec2, weights)))
+    return sum(a * b * w for a, b, w in zip(vec1, vec2, weights))
 
-def parse_query(query_body):
-    uid = query_body['userid']
-    workoutType = query_body['type']
-    level = query_body['level']
-    location = query_body['location']
-    intensity = query_body['intensity']
-    time = query_body['time']
-    duration = query_body['duration']
-    zipcode = 10027
-    
-    for g in query_body['goals']:
-        t=''
-        if g=='weight loss':
-            t = 'cardio'
-        elif g=='cardio':
-            t = 'cardio'
-        elif g=='muscle':
-            t = 'strength'
-        elif g=='fitness':
-            print('fitness')#t = 'all'
-        else:
-            print('unknown goal:', g)
-        if t not in workoutType:
-            workoutType.append(t)
-    print(workoutType)
-    return [uid, workoutType, zipcode, level, location, intensity, time, duration]
-    
-def get_courseIDs(slots):
-    #assume querybody is type for now
-    uid, workoutType, zipcode, level, location, intensity, time, duration = slots
-    print(workoutType, zipcode)
-    #ALSO CAN ADD OUTDOORS/INDOORS, STATE
-    
-    client = OpenSearch(hosts=[{
-        'host': HOST,
-        'port': 443
-    }],
-    http_auth=get_awsauth(REGION, 'es'),
-    use_ssl=True,
-    verify_certs=True,
-    connection_class=RequestsHttpConnection)
-    
-    results = []
-    
-    for t in workoutType:
-        q = {'size': 10,
-                "query": {
-                    "dis_max": {
-                      "queries": [
-                        { "match": { "type": t }},
-                        { "match": { "zip": zipcode }}
-                      ]
-                    }
-                  }
-            }
-        
-        res = client.search(index=INDEX, body=q)
-        print('query successful:',res)
-    
-        hits = res['hits']['hits']
-       
-        for hit in hits:
-            entry = hit['_source']
-            print('entry:', entry)
-            results.append(entry['objectKey'])
-    return results
+def weighted_magnitude(vec, weights):
+    #print('weighted mag', math.sqrt(weighted_dot_product(vec, vec, weights)))
+    return math.sqrt(weighted_dot_product(vec, vec, weights))
 
-def workout_info(place_ids):
-    all_info = []
-    
-    client = boto3.resource('dynamodb', region_name = REGION)
-    table = client.Table('workout_database')
-    #print(table)
-    for pid in place_ids:
-        try:
-            info = table.query(
-                KeyConditionExpression=Key('place_id').eq(pid)
-            )
-            #print("info:", info['Items'])
-            
-            indiv_info = info['Items'][0]
-            to_json_parsable(indiv_info)
-            print('query success:', indiv_info)
-            
-            all_info.append(indiv_info)
-        except Exception as e:
-            print(e)
-            print('query failed:', pid)
-    
-    return all_info
+def weighted_cosine_similarity(vec1, vec2, weights):
+    #print('weighted cosine similarity', weighted_dot_product(vec1, vec2, weights) / (weighted_magnitude(vec1, weights) * weighted_magnitude(vec2, weights)))
+    return weighted_dot_product(vec1, vec2, weights) / (weighted_magnitude(vec1, weights) * weighted_magnitude(vec2, weights))
 
+def time_to_minutes(time_str):
+    hours, minutes = map(int, time_str.split(':'))
+    return hours * 60 + minutes
+
+def one_hot_encoding(item, options):
+    return [1 if item == option else 0 for option in options]
+
+def getRollingWindowWorkoutIds(email):
+    displayNum = 3
+    
+    dynamodb = boto3.resource("dynamodb")
+    table = dynamodb.Table("user-profile")
+    info = table.get_item(Key={"email": email})
+    if 'Item' not in info:
+        return []
+    favs = info['Item']['favoritedids']
+    dones = info['Item']['doneids']
+    
+    returnedfavs = []
+    returnedcompletes = []
+
+    if(len(favs)<displayNum):
+        returnedfavs = favs
+    else:
+        returnedfavs = favs[-displayNum:]
+    if(len(returnedcompletes)<displayNum):
+        returnedcompletes = dones
+    else:
+        returnedcompletes = dones[-displayNum:]
+    
+    return returnedcompletes, returnedfavs
+
+def getWorkoutInfo(widArr):
+    if(widArr==[]):
+        return []
+    dynamodb = boto3.resource("dynamodb")
+    table = dynamodb.Table("workouts")
+    info = []
+    for wid in widArr:
+        #MIGHT NEED TO ADD ERROR CHECKING
+        entry = table.get_item(Key={"id": wid})['Item']
+        info.append(entry)
+    return info
+    
 def lambda_handler(event, context):
-    print('Received event: ' + json.dumps(event))
-
-    ##IMPLEMENT ERROR HANDLING##
-    if(event == [] or event =='' or event =={}):
-        return {
-            'statusCode': 200,
-            'headers': {
-                "Access-Control-Allow-Origin": "*",
-                'Content-Type': 'application/json'
-            },
-            'body': ''
-        }
     
-    # Get input query from API Gateway
-    user_info = event["multiValueQueryStringParameters"]
-    #print("query:",querybody)
+    email = event["email"]
     
-    parsed_info = parse_query(user_info)
+    # Retrieve user's past 3 completed workouts and past 3 favorited workout info
+    completeIds, favIds = getRollingWindowWorkoutIds(email)
+    completedInfo = getWorkoutInfo(completeIds)
+    favoritedInfo = getWorkoutInfo(favIds)
+    print(completedInfo, favoritedInfo)
     
+    # Retrieve user preferences
+    dynamodb = boto3.resource("dynamodb")
+    user_profile_table = dynamodb.Table("user-profile")
+    response = user_profile_table.query(KeyConditionExpression=Key("email").eq(email))
+    user_preferences = response["Items"][0]
     
-    recs = get_courseIDs(parsed_info)
-    
-    # choose 5 random fitness centers
-    max_len = len(recs)
-    random_pids = random.sample(recs, min(5, max_len))
-    
-    
-    # get info from dynamo
-    w_info = workout_info(random_pids)
-    
-    print('workout info:', w_info)
-    return {
-        'statusCode': 200,
-        'headers': {
-            "Access-Control-Allow-Origin": "*",
-            'Content-Type': 'application/json'
-        },
-        'body': json.dumps({'workouts': w_info})
+    intensity_mapping = {
+        'low': 1,
+        'moderate': 2,
+        'high': 3
     }
+    user_intensity = intensity_mapping[user_preferences["intensity"].lower()]/3
+    user_time_of_day = time_to_minutes(user_preferences["time_of_day"])/2400
+    user_type_encoding = one_hot_encoding(user_preferences["fav_workout_type"][0].lower(), ['cardio', 'fitness', 'pilates', 'yoga', 'cycling' , 'swimming'])
+    
+    print()
+    
+    print('intensity', user_intensity)
+    print('time_of_day', user_time_of_day)
+    print('type one hot', user_type_encoding)
+    
+    # Update user_type_encoding weights based on completed and favorited workouts
+    for workout in completedInfo + favoritedInfo:
+        workout_type = workout["type"].lower()
+        if workout_type in ['cardio', 'fitness', 'pilates', 'yoga', 'cycling', 'swimming']:
+            index = ['cardio', 'fitness', 'pilates', 'yoga', 'cycling', 'swimming'].index(workout_type)
+            user_type_encoding[index] += 1
+    
+    
+    user_vector = [user_intensity, user_time_of_day] + user_type_encoding
+    print('user_vect', user_vector)
+    
+    weights = [2, 1] + [3] * len(user_type_encoding)
+    
+    print('weights', weights)
+    # Retrieve workouts
+    workout_table = dynamodb.Table("workouts")
+    response = workout_table.scan()
+    workouts = response["Items"]
+    
+    # Calculate cosine similarities
+    similarities = []
+    for workout in workouts:
+        workout_intensity = intensity_mapping[workout["intensity"].lower()]/3
+        workout_start_time = time_to_minutes(workout["start_time"])/2400
+        workout_type_encoding = one_hot_encoding(workout["type"].lower(), ['cardio', 'fitness', 'pilates', 'yoga', 'cycling' , 'swimming'])
 
-def get_awsauth(region, service):
-    cred = boto3.Session().get_credentials()
-    return AWS4Auth(cred.access_key,
-                    cred.secret_key,
-                    region,
-                    service,
-                    session_token=cred.token)
-
+        workout_vector = [workout_intensity, workout_start_time] + workout_type_encoding
+        print('workout_vect', workout_vector)
+        print('user_vect', user_vector)
+        
+        similarity = weighted_cosine_similarity(user_vector, workout_vector, weights)
+        
+        print(similarity)
+        similarities.append((workout, similarity))
+    
+    # Sort workouts by similarity (descending order) and select top 10 or total entries
+    displayLength = min(15, len(similarities))
+    recommendations = sorted(similarities, key=lambda x: x[1], reverse=True)[:displayLength]
+    
+    # Extract workout details from recommendations
+    #recommendation_details = [rec[0] for rec in recommendations]
+    
+    return {
+        "statusCode": 200,
+        "body": json.dumps(recommendations, cls=DecimalEncoder)
+    }
