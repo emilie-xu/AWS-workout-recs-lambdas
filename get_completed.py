@@ -1,11 +1,10 @@
-
 import json
 
 dynamodb = boto3.resource('dynamodb')
 table = dynamodb.Table('user-profile')
 
 #input: {email: string}
-#output: {profile info}
+#output: {workoutids: []}
 
 def lambda_handler(event, context):
     # TODO implement
@@ -22,12 +21,12 @@ def lambda_handler(event, context):
             'headers': {
                 'Content-Type': 'application/json'
             },
-            'body': 'no profile data'
+            'body': 'no data'
         }
     return {
         'statusCode': 200,
         'headers': {
             'Content-Type': 'application/json'
         },
-        'body': json.dumps(info['Item'])
+        'body': json.dumps({'doneids': info['Item']['doneids']})
     }
