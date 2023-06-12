@@ -30,7 +30,7 @@ def lambda_handler(event, context):
     print('event: ', json.dumps(event))
     
     # use to delete entries from table
-    #table.delete_item(Key={'email': 'sarahtang07@gmail.com'})
+    #table.delete_item(Key={'email': 'XXXXXXXXXX@gmail.com'})
     
     # test: print contents of table
     response = table.scan()
